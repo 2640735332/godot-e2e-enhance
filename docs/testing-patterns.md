@@ -357,7 +357,7 @@ The `--e2e-log` flag makes the Godot server print every request and response to 
 [godot-e2e] server listening on port 6008
 [godot-e2e] client connected
 [godot-e2e] << hello (id=1)
-[godot-e2e] >> {"id":1,"ok":true,"godot_version":"4.4.0","server_version":"0.1.0"}
+[godot-e2e] >> {"id":1,"ok":true,"godot_version":"4.4.0","server_version":"1.0.0"}
 [godot-e2e] << get_property (id=2)
 [godot-e2e] >> {"id":2,"result":{"_t":"v2","x":400.0,"y":300.0}}
 ```

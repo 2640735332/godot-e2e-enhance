@@ -116,7 +116,7 @@ The first command after connecting must be `hello`:
     "id": 1,
     "ok": true,
     "godot_version": "4.4.0",
-    "server_version": "0.1.0"
+    "server_version": "1.0.0"
 }
 ```
 

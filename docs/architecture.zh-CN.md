@@ -116,7 +116,7 @@ godot-e2e 以两个独立进程运行，通过本地 TCP 连接通信：
     "id": 1,
     "ok": true,
     "godot_version": "4.4.0",
-    "server_version": "0.1.0"
+    "server_version": "1.0.0"
 }
 ```
 

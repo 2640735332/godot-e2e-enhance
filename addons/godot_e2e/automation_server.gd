@@ -10,7 +10,7 @@ const CommandHandlerScript = preload("command_handler.gd")
 
 var _handler = null
 
-const SERVER_VERSION := "0.1.0"
+const SERVER_VERSION := "1.0.0"
 
 enum State {
 	LISTENING,

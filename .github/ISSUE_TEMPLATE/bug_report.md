@@ -29,7 +29,7 @@ assignees: ''
 - OS: <!-- e.g., Windows 11, Ubuntu 22.04, macOS 14 -->
 - Godot version: <!-- e.g., 4.4.1 -->
 - Python version: <!-- e.g., 3.10.9 -->
-- godot-e2e version: <!-- e.g., 0.1.0 -->
+- godot-e2e version: <!-- e.g., 1.0.0 -->
 
 ## Screenshots / Logs
 

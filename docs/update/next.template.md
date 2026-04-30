@@ -17,8 +17,6 @@ If no category fits, add a new one following [Keep a Changelog](https://keepacha
 
 ## Added
 
-- Repo-meta baseline: `ROADMAP.md` (+ zh-CN, with five tasks), `docs/versioning.md` (+ zh-CN), `.gitleaks.toml` config, `docs/update/next.template.md`. `docs/internal/` is now gitignored as a local-only space for ADRs, design notes, and lessons that we do not publish. — @LiuXin
-
 ## Changed
 
 ## Fixed

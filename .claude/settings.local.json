@@ -1,0 +1,21 @@
+{
+  "enabledMcpjsonServers": ["playwright"],
+  "permissions": {
+    "allow": [
+      "Bash(npm init *)",
+      "Bash(npm install *)",
+      "Bash(npx *)",
+      "Bash(node *)",
+      "Bash(start *)",
+      "Bash(taskkill *)",
+      "Bash(netstat *)",
+      "Bash(curl *)",
+      "Bash(python *)",
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(mkdir *)",
+      "MCP(playwright *)"
+    ],
+    "defaultMode": "bypassPermissions"
+  }
+}

@@ -29,6 +29,8 @@ class GodotClient:
         self._recv_buffer: bytes = b""
         self._next_id: int = 1
         self._lock = threading.Lock()
+        # Log buffer accumulated across all responses.
+        self.logs: list = []
 
     # ------------------------------------------------------------------
     # Connection lifecycle
@@ -86,6 +88,10 @@ class GodotClient:
                 raise ConnectionLostError(f"Failed to send command: {exc}") from exc
 
             response = self._read_response()
+
+            # Accumulate log entries from the server.
+            if "_logs" in response:
+                self.logs.extend(response.pop("_logs"))
 
             if "error" in response:
                 error_code = response["error"]

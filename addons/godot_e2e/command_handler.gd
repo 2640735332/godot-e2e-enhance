@@ -58,6 +58,26 @@ func execute(cmd: Dictionary) -> Dictionary:
 			return _cmd_reload_scene(cmd, id)
 		"screenshot":
 			return _cmd_screenshot(cmd, id)
+		"get_logs":
+			return _cmd_get_logs(cmd, id)
+		"clear_logs":
+			return _cmd_clear_logs(cmd, id)
+		"set_log_verbosity":
+			return _cmd_set_log_verbosity(cmd, id)
+		"log_message":
+			return _cmd_log_message(cmd, id)
+		"perf_get_stats":
+			return _cmd_perf_get_stats(cmd, id)
+		"perf_enable":
+			return _cmd_perf_enable(cmd, id)
+		"perf_disable":
+			return _cmd_perf_disable(cmd, id)
+		"perf_reset":
+			return _cmd_perf_reset(cmd, id)
+		"locator_find":
+			return _cmd_locator_find(cmd, id)
+		"locator_action":
+			return _cmd_locator_action(cmd, id)
 		"quit":
 			return _cmd_quit(cmd, id)
 		_:
@@ -186,6 +206,253 @@ func _cmd_batch(cmd: Dictionary, id) -> Dictionary:
 		else:
 			results.append(sub_result)
 	return {"id": id, "results": results}
+
+
+# ---------------------------------------------------------------------------
+# Locator — multi-strategy node resolution
+# ---------------------------------------------------------------------------
+
+func _cmd_locator_find(cmd: Dictionary, id) -> Dictionary:
+	var filters: Array = cmd.get("filters", [])
+	var multi: String = cmd.get("multi", "error")
+	var timeout: float = cmd.get("timeout", 5.0)
+
+	if filters.is_empty():
+		return {"id": id, "error": "locator_find requires at least one filter"}
+
+	var nodes: Array = []
+	var first_filter: Dictionary = filters[0]
+	var strategy: String = first_filter.get("strategy", "path")
+	var value: String = first_filter.get("value", "")
+	var pattern: String = first_filter.get("pattern", "")
+
+	match strategy:
+		"path", "path_pattern":
+			if value.begins_with("/"):
+				var node = _server.get_tree().root.get_node_or_null(value)
+				if node != null:
+					nodes = [node]
+			else:
+				# Wildcard path matching
+				_walk_path_match(_server.get_tree().root, value, nodes)
+		"name":
+			_walk_name_match(_server.get_tree().root, value, nodes)
+		"group":
+			nodes = _server.get_tree().get_nodes_in_group(value)
+		"text":
+			_walk_text_match(_server.get_tree().root, value, nodes)
+		"type":
+			_walk_type_match(_server.get_tree().root, value, nodes)
+		"script":
+			_walk_script_match(_server.get_tree().root, value, nodes)
+		_:
+			return {"id": id, "error": "Unknown locator strategy: " + strategy}
+
+	# Apply chained filters (filters[1:]).
+	for i in range(1, filters.size()):
+		var f: Dictionary = filters[i]
+		var f_strategy: String = f.get("strategy", "")
+		var f_value: String = f.get("value", "")
+		match f_strategy:
+			"name":
+				nodes = _filter_by_name(nodes, f_value)
+			"group":
+				nodes = _filter_by_group(nodes, f_value)
+			"text":
+				nodes = _filter_by_text(nodes, f_value)
+			"type":
+				nodes = _filter_by_type(nodes, f_value)
+			"script":
+				nodes = _filter_by_script(nodes, f_value)
+			"visible":
+				nodes = _filter_visible(nodes)
+			_:
+				return {"id": id, "error": "Unknown filter strategy: " + f_strategy}
+
+	var paths: Array = []
+	for node in nodes:
+		paths.append(str(node.get_path()))
+
+	# Multi-match handling
+	if paths.size() > 1 and multi == "error":
+		return {
+			"id": id,
+			"error": "locator_ambiguous",
+			"message": "Locator matched %d nodes (expected 1). Use .first, .nth(i), or .all." % paths.size(),
+			"nodes": paths,
+		}
+	if multi == "first" and paths.size() > 0:
+		paths = [paths[0]]
+	elif multi == "nth":
+		var index: int = cmd.get("nth", 0)
+		if index >= 0 and index < paths.size():
+			paths = [paths[index]]
+		else:
+			paths = []
+
+	return {"id": id, "nodes": paths}
+
+
+func _cmd_locator_action(cmd: Dictionary, id) -> Dictionary:
+	var find_result: Dictionary = _cmd_locator_find(cmd, id)
+	if find_result.has("error"):
+		return find_result
+
+	var paths: Array = find_result.get("nodes", [])
+	if paths.is_empty():
+		return {"id": id, "error": "node_not_found", "message": "Locator matched no nodes"}
+
+	var action: String = cmd.get("locator_action", "")
+	var target_path: String = paths[0]
+
+	match action:
+		"click":
+			return _cmd_click_node({"path": target_path}, id)
+		"get_property":
+			return _cmd_get_property({
+				"path": target_path,
+				"property": cmd.get("property", ""),
+			}, id)
+		"set_property":
+			return _cmd_set_property({
+				"path": target_path,
+				"property": cmd.get("property", ""),
+				"value": cmd.get("value"),
+			}, id)
+		"call":
+			return _cmd_call_method({
+				"path": target_path,
+				"method": cmd.get("method", ""),
+				"args": cmd.get("args", []),
+			}, id)
+		"exists":
+			return {"id": id, "exists": true}
+		"wait_visible":
+			var node = _server.get_tree().root.get_node_or_null(target_path)
+			if node is Control:
+				if node.is_visible_in_tree():
+					return {"id": id, "ok": true}
+				return {
+					"_deferred": true,
+					"wait_type": "property",
+					"path": target_path,
+					"property": "visible",
+					"value": true,
+					"timeout": cmd.get("timeout", 5.0),
+					"id": id,
+					"response": {"id": id, "ok": true},
+				}
+			return {"id": id, "ok": true, "message": "Node is not a Control; visibility check skipped"}
+		_:
+			return {"id": id, "error": "Unknown locator action: " + action}
+
+
+# ---------------------------------------------------------------------------
+# Locator tree walk helpers
+# ---------------------------------------------------------------------------
+
+func _walk_path_match(node: Node, pattern: String, results: Array) -> void:
+	if _path_matches(node, pattern):
+		results.append(node)
+	for child in node.get_children():
+		_walk_path_match(child, pattern, results)
+
+
+func _path_matches(node: Node, pattern: String) -> bool:
+	# Simple */name pattern matching
+	if pattern.ends_with("/*"):
+		return true  # Any node at this level
+	var node_path: String = str(node.get_path())
+	if pattern.begins_with("*/"):
+		return node_path.ends_with(pattern.substr(1))
+	return node_path.match(pattern)
+
+
+func _walk_name_match(node: Node, pattern: String, results: Array) -> void:
+	if node.name.match(pattern):
+		results.append(node)
+	for child in node.get_children():
+		_walk_name_match(child, pattern, results)
+
+
+func _walk_text_match(node: Node, text: String, results: Array) -> void:
+	if node is Control:
+		if "text" in node and str(node.get("text")) == text:
+			results.append(node)
+	for child in node.get_children():
+		_walk_text_match(child, text, results)
+
+
+func _walk_type_match(node: Node, type_name: String, results: Array) -> void:
+	if node.get_class() == type_name:
+		results.append(node)
+	for child in node.get_children():
+		_walk_type_match(child, type_name, results)
+
+
+func _walk_script_match(node: Node, script_name: String, results: Array) -> void:
+	var scr = node.get_script()
+	if scr != null:
+		var path: String = scr.resource_path
+		if path.ends_with(script_name) or path.match(script_name):
+			results.append(node)
+	for child in node.get_children():
+		_walk_script_match(child, script_name, results)
+
+
+# ---------------------------------------------------------------------------
+# Locator filter helpers (operate on node arrays)
+# ---------------------------------------------------------------------------
+
+func _filter_by_name(nodes: Array, pattern: String) -> Array:
+	var out: Array = []
+	for node in nodes:
+		if node.name.match(pattern):
+			out.append(node)
+	return out
+
+
+func _filter_by_group(nodes: Array, group: String) -> Array:
+	var out: Array = []
+	for node in nodes:
+		if node.is_in_group(group):
+			out.append(node)
+	return out
+
+
+func _filter_by_text(nodes: Array, text: String) -> Array:
+	var out: Array = []
+	for node in nodes:
+		if node is Control and "text" in node and str(node.get("text")) == text:
+			out.append(node)
+	return out
+
+
+func _filter_by_type(nodes: Array, type_name: String) -> Array:
+	var out: Array = []
+	for node in nodes:
+		if node.get_class() == type_name:
+			out.append(node)
+	return out
+
+
+func _filter_by_script(nodes: Array, script_name: String) -> Array:
+	var out: Array = []
+	for node in nodes:
+		var scr = node.get_script()
+		if scr != null:
+			var path: String = scr.resource_path
+			if path.ends_with(script_name) or path.match(script_name):
+				out.append(node)
+	return out
+
+
+func _filter_visible(nodes: Array) -> Array:
+	var out: Array = []
+	for node in nodes:
+		if node is CanvasItem and node.visible:
+			out.append(node)
+	return out
 
 
 # ---------------------------------------------------------------------------
@@ -465,6 +732,58 @@ func _cmd_screenshot(cmd: Dictionary, id) -> Dictionary:
 		abs_path = ProjectSettings.globalize_path(save_path)
 
 	return {"id": id, "ok": true, "path": abs_path}
+
+
+# ---------------------------------------------------------------------------
+# Log Capture
+# ---------------------------------------------------------------------------
+
+func _cmd_get_logs(cmd: Dictionary, id) -> Dictionary:
+	var verbosity: String = cmd.get("verbosity", "")
+	var logs: Array = _server.get_logs(verbosity)
+	return {"id": id, "logs": logs}
+
+
+func _cmd_clear_logs(_cmd: Dictionary, id) -> Dictionary:
+	_server.clear_logs()
+	return {"id": id, "ok": true}
+
+
+func _cmd_set_log_verbosity(cmd: Dictionary, id) -> Dictionary:
+	var level: String = cmd.get("level", "error")
+	_server.set_log_verbosity(level)
+	return {"id": id, "ok": true}
+
+
+func _cmd_log_message(cmd: Dictionary, id) -> Dictionary:
+	var level: String = cmd.get("level", "info")
+	var message: String = cmd.get("message", "")
+	_server.add_log(level, message)
+	return {"id": id, "ok": true}
+
+
+# ---------------------------------------------------------------------------
+# Performance Metrics
+# ---------------------------------------------------------------------------
+
+func _cmd_perf_get_stats(_cmd: Dictionary, id) -> Dictionary:
+	var stats: Dictionary = _server.get_perf_stats()
+	return {"id": id, "stats": stats}
+
+
+func _cmd_perf_enable(_cmd: Dictionary, id) -> Dictionary:
+	_server.enable_perf_monitoring()
+	return {"id": id, "ok": true}
+
+
+func _cmd_perf_disable(_cmd: Dictionary, id) -> Dictionary:
+	_server.disable_perf_monitoring()
+	return {"id": id, "ok": true}
+
+
+func _cmd_perf_reset(_cmd: Dictionary, id) -> Dictionary:
+	_server.reset_perf_stats()
+	return {"id": id, "ok": true}
 
 
 # ---------------------------------------------------------------------------

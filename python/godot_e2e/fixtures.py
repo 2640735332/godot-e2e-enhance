@@ -47,6 +47,8 @@ def game(_game_instance, request):
     # Screenshot on failure
     if hasattr(request.node, "rep_call") and request.node.rep_call.failed:
         _take_failure_screenshot(_game_instance, request.node.name)
+        _report_logs_on_failure(_game_instance, request.node.name)
+        _game_instance.clear_client_logs()
 
 
 @pytest.fixture(scope="function")
@@ -64,6 +66,8 @@ def game_fresh(request):
         # Screenshot on failure
         if hasattr(request.node, "rep_call") and request.node.rep_call.failed:
             _take_failure_screenshot(game, request.node.name)
+            _report_logs_on_failure(game, request.node.name)
+            game.clear_client_logs()
 
 
 # ---------------------------------------------------------------------------
@@ -80,6 +84,20 @@ def _take_failure_screenshot(game: GodotE2E, test_name: str):
         print(f"\n[godot-e2e] Failure screenshot saved: {path}")
     except Exception as e:
         print(f"\n[godot-e2e] Failed to capture screenshot: {e}")
+
+
+def _report_logs_on_failure(game: GodotE2E, test_name: str) -> None:
+    """Print captured engine logs when a test fails."""
+    logs = game.get_client_logs()
+    if not logs:
+        return
+    print(f"\n[godot-e2e] Engine logs for {test_name}:")
+    print("-" * 60)
+    for entry in logs:
+        level = entry.get("level", "info").upper()
+        msg = entry.get("message", "")
+        print(f"  [{level}] {msg}")
+    print("-" * 60)
 
 
 def _get_project_path(request) -> str:

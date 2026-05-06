@@ -64,6 +64,24 @@ var _wait_start_ms: int = 0
 # --- Physics frame counter ---
 var _physics_frame_counter: int = 0
 
+# --- Performance metrics ---
+var _perf_enabled: bool = false
+var _perf_fps_samples: Array = []  # Array[float] — last N frame times
+var _perf_max_samples: int = 120   # ~2 seconds at 60fps
+var _perf_frame_time_sum: float = 0.0
+var _perf_frame_count: int = 0
+
+# --- Log capture ---
+const MAX_LOG_ENTRIES := 1000
+var _log_buffer: Array = []       # Array[Dictionary] — {level, message, time}
+var _log_verbosity: String = "error"  # error | warning | info
+
+# --- Error tracking (auto-capture script errors in our commands) ---
+var _error_capture_enabled: bool = false
+var _error_captured: bool = false
+var _error_message: String = ""
+var _error_count_before: int = 0
+
 
 func _ready() -> void:
 	if not Config.is_enabled():
@@ -97,6 +115,7 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
+	_record_frame_time(delta)
 	match _state:
 		State.LISTENING:
 			_poll_listening()
@@ -192,6 +211,9 @@ func _poll_recv() -> void:
 func _send_response(data: Dictionary) -> void:
 	if _peer == null:
 		return
+	# Attach recent log entries to every response.
+	if not _log_buffer.is_empty():
+		data["_logs"] = _log_buffer.duplicate()
 	var json_str := JSON.stringify(data)
 	var payload := json_str.to_utf8_buffer()
 	var header := PackedByteArray()
@@ -444,3 +466,118 @@ func _write_port_file(path: String, port: int) -> void:
 func _log(msg: String) -> void:
 	if Config.is_logging():
 		print("[godot-e2e] %s" % msg)
+
+
+# ---------------------------------------------------------------------------
+# Log capture — buffers errors/warnings/info for pytest consumption
+# ---------------------------------------------------------------------------
+
+func add_log(level: String, message: String) -> void:
+	"""Add a log entry to the capture buffer.
+
+	Called by game code via ``AutomationServer.add_log("error", msg)`` or
+	automatically during command execution.
+
+	Levels: ``"error"``, ``"warning"``, ``"info"``.
+	"""
+	if _log_verbosity == "error" and level == "info":
+		return
+	if _log_verbosity == "warning" and level == "info":
+		return
+	_log_buffer.append({
+		"level": level,
+		"message": message,
+		"time": Time.get_ticks_msec(),
+	})
+	if _log_buffer.size() > MAX_LOG_ENTRIES:
+		_log_buffer.pop_front()
+
+
+func get_logs(verbosity: String = "") -> Array:
+	"""Return captured log entries, optionally filtered by level."""
+	if verbosity.is_empty():
+		return _log_buffer.duplicate()
+	var out: Array = []
+	for entry in _log_buffer:
+		if entry["level"] == verbosity:
+			out.append(entry)
+	return out
+
+
+func clear_logs() -> void:
+	"""Remove all captured log entries."""
+	_log_buffer.clear()
+	_error_captured = false
+	_error_message = ""
+
+
+func set_log_verbosity(level: String) -> void:
+	"""Set minimum log level to capture: error, warning, or info."""
+	_log_verbosity = level
+
+
+# ---------------------------------------------------------------------------
+# Performance metrics
+# ---------------------------------------------------------------------------
+
+func _record_frame_time(delta: float) -> void:
+	if not _perf_enabled:
+		return
+	var frame_ms := delta * 1000.0
+	_perf_fps_samples.append(frame_ms)
+	_perf_frame_time_sum += frame_ms
+	_perf_frame_count += 1
+	if _perf_fps_samples.size() > _perf_max_samples:
+		var removed := _perf_fps_samples.pop_front()
+		_perf_frame_time_sum -= removed
+
+
+func enable_perf_monitoring() -> void:
+	_perf_enabled = true
+
+
+func disable_perf_monitoring() -> void:
+	_perf_enabled = false
+
+
+func get_perf_stats() -> Dictionary:
+	"""Return current performance statistics.
+
+	Returns a dictionary with:
+	  - ``fps``: Average FPS over the sample window.
+	  - ``frame_time_ms``: Average frame time in milliseconds.
+	  - ``frame_time_min_ms``: Minimum frame time.
+	  - ``frame_time_max_ms``: Maximum frame time.
+	  - ``memory_static_mb``: Static memory usage.
+	  - ``memory_video_mb``: Video memory usage.
+	  - ``physics_frames``: Total physics frame count.
+	"""
+	var sample_count := _perf_fps_samples.size()
+	var avg_ms: float = 0.0
+	var min_ms: float = 0.0
+	var max_ms: float = 0.0
+	var fps: float = 0.0
+
+	if sample_count > 0:
+		avg_ms = _perf_frame_time_sum / sample_count
+		min_ms = _perf_fps_samples.min()
+		max_ms = _perf_fps_samples.max()
+		fps = 1000.0 / avg_ms if avg_ms > 0 else 0.0
+
+	return {
+		"fps": snapped(fps, 0.1),
+		"frame_time_ms": snapped(avg_ms, 0.01),
+		"frame_time_min_ms": snapped(min_ms, 0.01),
+		"frame_time_max_ms": snapped(max_ms, 0.01),
+		"frame_time_samples": sample_count,
+		"memory_static_mb": snapped(Performance.get_monitor(Performance.MEMORY_STATIC) / 1048576.0, 0.1),
+		"memory_video_mb": snapped(Performance.get_monitor(Performance.RENDER_VIDEO_MEM_USED) / 1048576.0, 0.1),
+		"physics_frames": _physics_frame_counter,
+	}
+
+
+func reset_perf_stats() -> void:
+	_perf_fps_samples.clear()
+	_perf_frame_time_sum = 0.0
+	_perf_frame_count = 0
+	_physics_frame_counter = 0

@@ -225,6 +225,89 @@ class GodotE2E:
         resp = self._client.send_command("screenshot", save_path=save_path)
         return resp.get("path", "")
 
+    # --- Log Capture ---
+
+    def get_logs(self, verbosity: str = "") -> list:
+        """Return captured engine logs from the Godot process.
+
+        Args:
+            verbosity: Filter by level (``"error"``, ``"warning"``, ``"info"``).
+                       Empty string returns all levels.
+        """
+        resp = self._client.send_command("get_logs", verbosity=verbosity)
+        return resp.get("logs", [])
+
+    def clear_logs(self) -> None:
+        """Clear the server-side log buffer."""
+        self._client.send_command("clear_logs")
+
+    def set_log_verbosity(self, level: str) -> None:
+        """Set minimum log level to capture.
+
+        Args:
+            level: ``"error"`` (default), ``"warning"``, or ``"info"``.
+        """
+        self._client.send_command("set_log_verbosity", level=level)
+
+    def get_client_logs(self) -> list:
+        """Return all log entries accumulated on the client side so far."""
+        return self._client.logs
+
+    def clear_client_logs(self) -> None:
+        """Clear client-side accumulated logs."""
+        self._client.logs.clear()
+
+    # --- Performance Metrics ---
+
+    def perf_enable(self) -> None:
+        """Enable FPS/frame-time/memory monitoring on the Godot side."""
+        self._client.send_command("perf_enable")
+
+    def perf_disable(self) -> None:
+        """Disable performance monitoring."""
+        self._client.send_command("perf_disable")
+
+    def perf_reset(self) -> None:
+        """Reset accumulated performance samples."""
+        self._client.send_command("perf_reset")
+
+    def perf_get_stats(self) -> dict:
+        """Return current performance statistics from the Godot process.
+
+        Keys: ``fps``, ``frame_time_ms``, ``frame_time_min_ms``,
+        ``frame_time_max_ms``, ``memory_static_mb``, ``memory_video_mb``,
+        ``physics_frames``.
+        """
+        resp = self._client.send_command("perf_get_stats")
+        return resp.get("stats", {})
+
+    # --- Locator ---
+
+    def locator(self) -> "Locator":
+        """Return a new :class:`Locator` bound to this game connection.
+
+        Usage::
+
+            game.locator().by_name("Player").click()
+            game.locator().by_text("Start Game").first.click()
+            game.locator().by_group("enemies").all.as_nodes()
+        """
+        from .locator import Locator
+        return Locator(self._client)
+
+    def expect(self, locator: "Locator", timeout: float = 5.0, interval: float = 0.1) -> "ExpectTarget":
+        """Create an auto-retry assertion target bound to *locator*.
+
+        Shortcut for ``expect(locator, ...)``. See :mod:`godot_e2e.expect`.
+
+        Usage::
+
+            game.expect(game.locator().by_text("Start")).to_be_visible()
+            game.expect(game.locator().by_name("Player")).to_have_property("health", 100)
+        """
+        from .expect import ExpectTarget
+        return ExpectTarget(locator, timeout=timeout, interval=interval)
+
     # --- Misc ---
 
     def quit(self, exit_code: int = 0):
